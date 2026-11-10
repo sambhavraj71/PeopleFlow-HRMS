@@ -400,6 +400,13 @@ const verifyGPS = (body) => {
   const data = validate(gpsSchema, body);
 
   const now = Date.now();
+  console.log("GPS Validation Debug:", {
+  serverTime: now,
+  capturedAt: data.capturedAt,
+  gpsAgeSeconds: (now - data.capturedAt) / 1000,
+  maxAgeSeconds: GPS_MAX_AGE_MS / 1000,
+  futureSeconds: (data.capturedAt - now) / 1000
+});
 
   if (
     data.capturedAt > now + 5000 ||
