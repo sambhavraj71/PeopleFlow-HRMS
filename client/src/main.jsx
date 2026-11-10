@@ -796,10 +796,7 @@ function App() {
             </button>
           </form>
 
-          <p className="hint">
-            First time? Run the server seed command
-            to create your admin account.
-          </p>
+          
 
           {message && (
             <div className="toast">{message}</div>
