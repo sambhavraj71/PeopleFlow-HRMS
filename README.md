@@ -13,7 +13,7 @@
 ![MongoDB](https://img.shields.io/badge/MongoDB-47A248?style=for-the-badge&logo=mongodb&logoColor=white)
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 
-![Status](https://img.shields.io/badge/Status-Pre--deployment-orange?style=flat-square)
+
 ![Project](https://img.shields.io/badge/Project-Full%20Stack%20HRMS-blue?style=flat-square)
 ![Authentication](https://img.shields.io/badge/Auth-JWT%20%2B%20RBAC-purple?style=flat-square)
 
@@ -38,10 +38,9 @@ The application covers employee administration, shift assignment, location-aware
 | Resource | Link |
 |---|---|
 | 🌐 Frontend Live Demo | [Open Live App](https://peopleflow-hrms-xvh5.onrender.com) |
-| ⚙️ Backend API | [Backend Service](https://peopleflow-backend-delj.onrender.com) |
+| ⚙️ Backend API | [Backend Service](*************) |
 | 💻 GitHub Repository | [View Source](https://github.com/sambhavraj71/PeopleFlow-HRMS) |
-| 📸 Application Screenshots | **Add screenshots after deployment** |
-| 🎥 Demo Video (optional) | **Add demo link** |
+
 
 ### Screenshot gallery (add later)
 
