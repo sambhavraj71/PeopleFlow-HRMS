@@ -68,7 +68,21 @@ function App() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [sidebar, setSidebar] = useState(false);
-
+  useEffect(() => {
+    if (!sidebar) return;
+  
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setSidebar(false);
+      }
+    };
+  
+    window.addEventListener("keydown", handleEscape);
+  
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [sidebar]);
   const [month, setMonth] = useState(() => {
     const now = new Date();
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -837,6 +851,12 @@ const gpsAttendance = async (action) => {
 
   return (
     <div className="app">
+      {sidebar && (
+        <div
+          className="sidebar-overlay"
+          onClick={() => setSidebar(false)}
+        />
+      )}
       <aside
         className={
           "sidebar " + (sidebar ? "show" : "")
@@ -894,9 +914,12 @@ const gpsAttendance = async (action) => {
         <header>
           <button
             className="menu-btn"
-            onClick={() => setSidebar(!sidebar)}
+            type="button"
+            onClick={() => setSidebar((prev) => !prev)}
+            aria-label={sidebar ? "Close sidebar" : "Open sidebar"}
+            aria-expanded={sidebar}
           >
-            <Menu size={22} />
+            {sidebar ? <span style={{ fontSize: 24 }}>×</span> : <Menu size={22} />}
           </button>
 
           <div>
