@@ -17,7 +17,7 @@
 ![Project](https://img.shields.io/badge/Project-Full%20Stack%20HRMS-blue?style=flat-square)
 ![Authentication](https://img.shields.io/badge/Auth-JWT%20%2B%20RBAC-purple?style=flat-square)
 
-[🌐 Live Demo (Coming Soon)](#-live-links--screenshots) · [📘 API Reference](#-api-reference) · [⚙️ Setup](#️-local-development-setup) · [🚀 Deployment](#-deployment-on-render)
+[🌐 Live Demo](https://peopleflow-hrms-xvh5.onrender.com) · [📘 API Reference](#-api-reference) · [⚙️ Setup](#️-local-development-setup) · [🚀 Deployment](#-deployment-on-render)
 
 </div>
 
@@ -29,17 +29,17 @@
 
 The application covers employee administration, shift assignment, location-aware attendance, leave requests and approvals, payroll generation, employee document verification, HR reporting, and targeted internal announcements.
 
-> **Current status:** Core application modules have been implemented. Public deployment, production configuration, and end-to-end verification are in progress. This README describes implemented workflows based on the current project information; it does not claim a completed production security or scalability audit.
+> **Current status:** The frontend and backend are deployed on Render, and the application owner reports that login and application functionality are working. Production security, reliability, and scalability audits have not been completed. Durable private storage is still needed before retaining real employee documents.
 
 ## 🔗 Live Links & Screenshots
 
-> Replace these placeholders **after deployment**. Do not publish broken placeholder URLs as working links.
+**Production deployment:** React frontend and Express API are hosted on Render. Screenshots and a demo video can be added later.
 
 | Resource | Link |
 |---|---|
-| 🌐 Frontend Live Demo | **Coming soon — add Render Static Site URL** |
-| ⚙️ Backend API | **Coming soon — add Render Web Service URL** |
-| 💻 GitHub Repository | **Add repository URL** |
+| 🌐 Frontend Live Demo | [Open Live App](https://peopleflow-hrms-xvh5.onrender.com) |
+| ⚙️ Backend API | [Backend Service](https://peopleflow-backend-delj.onrender.com) |
+| 💻 GitHub Repository | [View Source](https://github.com/sambhavraj71/PeopleFlow-HRMS) |
 | 📸 Application Screenshots | **Add screenshots after deployment** |
 | 🎥 Demo Video (optional) | **Add demo link** |
 
@@ -256,11 +256,10 @@ peopleflow-hrms/
 ### 1. Clone the repository
 
 ```bash
-git clone <YOUR_GITHUB_REPOSITORY_URL>
-cd peopleflow-hrms
+git clone https://github.com/sambhavraj71/PeopleFlow-HRMS.git
+cd PeopleFlow-HRMS
 ```
 
-Replace `<YOUR_GITHUB_REPOSITORY_URL>` with the actual repository URL after publishing.
 
 ### 2. Configure and run the backend
 
@@ -413,18 +412,19 @@ curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
 
 ## 🚀 Deployment on Render
 
-**Target architecture:** GitHub repository → Render Web Service (backend) + Render Static Site (frontend) → MongoDB Atlas.
+**Live architecture:** [GitHub repository](https://github.com/sambhavraj71/PeopleFlow-HRMS) → [Render Web Service (backend)](https://peopleflow-backend-delj.onrender.com) + [Render Static Site (frontend)](https://peopleflow-hrms-xvh5.onrender.com) → MongoDB Atlas.
 
 ### Backend: Render Web Service
 
-| Setting | Suggested value |
+| Setting | Production configuration |
 |---|---|
-| Source | GitHub repository |
+| Source | `sambhavraj71/PeopleFlow-HRMS` (`main`) |
 | Root Directory | `server` |
 | Runtime | Node |
 | Build Command | `npm ci` (if `package-lock.json` exists) |
-| Start Command | `npm start` **only if defined in `server/package.json`** |
-| Environment | MongoDB connection string, JWT secret, and other variables required by code |
+| Start Command | `npm start` |
+| Environment | `MONGO_URI`, `JWT_SECRET`, `CLIENT_URL` and other variables required by code |
+| `CLIENT_URL` | `https://peopleflow-hrms-xvh5.onrender.com` (no trailing slash) |
 
 **Before deployment:**
 
@@ -437,13 +437,13 @@ curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
 
 ### Frontend: Render Static Site
 
-| Setting | Suggested value |
+| Setting | Production configuration |
 |---|---|
-| Source | Same GitHub repository |
+| Source | `sambhavraj71/PeopleFlow-HRMS` (`main`) |
 | Root Directory | `client` |
 | Build Command | `npm ci && npm run build` (if lockfile exists) |
 | Publish Directory | `dist` |
-| Environment variable | `VITE_API_URL=https://YOUR-BACKEND.onrender.com/api` |
+| `VITE_API_URL` | `https://peopleflow-backend-delj.onrender.com/api` (no trailing slash) |
 
 If using client-side routes that rely on browser history, configure a static-site rewrite to `index.html` as appropriate for the router in use.
 
@@ -451,12 +451,14 @@ If using client-side routes that rely on browser history, configure a static-sit
 
 ### Deployment verification checklist
 
-- [ ] Latest changes pushed to GitHub.
-- [ ] Backend starts successfully on Render.
+The application owner has confirmed that the live deployment and login are working. The remaining checks should be validated individually before production use.
+
+- [x] Latest changes pushed to GitHub.
+- [x] Backend starts successfully on Render.
 - [ ] MongoDB Atlas connection succeeds.
-- [ ] Frontend loads over HTTPS.
-- [ ] Frontend uses the correct deployed API URL.
-- [ ] CORS allows the deployed frontend origin.
+- [x] Frontend loads over HTTPS.
+- [x] Frontend uses the correct deployed API URL.
+- [x] CORS allows the deployed frontend origin.
 - [ ] Admin, HR, and Employee sign-in works.
 - [ ] Role restrictions and ownership checks work.
 - [ ] Shift management and GPS attendance work in browser.
@@ -528,7 +530,8 @@ Automated unit/integration tests and CI/CD are planned improvements unless they 
 
 ### Deployment and future enhancements
 
-- [ ] Public Render deployment and full end-to-end verification
+- [x] Public Render deployment and successful login reported
+- [ ] Formal end-to-end regression testing of every module
 - [ ] Durable private document storage
 - [ ] Automated backend/frontend tests
 - [ ] GitHub Actions CI/CD
@@ -551,7 +554,7 @@ This project demonstrates practical full-stack development concepts relevant to 
 - Building multi-step approval and verification workflows.
 - Generating downloadable reports and payslips.
 - Separating employee-facing and HR/Admin functionality.
-- Preparing a multi-service application for cloud deployment.
+- Deploying and configuring a multi-service application on Render.
 
 ---
 
@@ -569,6 +572,6 @@ This is currently a portfolio/development project. If you plan to accept contrib
 
 **PeopleFlow HRMS — Simplifying workforce operations through a unified MERN workspace.**
 
-*Built as a full-stack development project. Live deployment links will be added after verification.*
+[**Launch Live Application**](https://peopleflow-hrms-xvh5.onrender.com) · [**View Source Code**](https://github.com/sambhavraj71/PeopleFlow-HRMS)
 
 </div>
