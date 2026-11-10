@@ -349,40 +349,65 @@ function App() {
     });
   };
 
-  const gpsAttendance = async (action) => {
-    setBusy(true);
-    setGpsStatus("Getting current location...");
+const gpsAttendance = async (action) => {
+  setBusy(true);
+  setGpsStatus("Getting current location...");
 
-    try {
-      const location = gpsConfig?.gpsEnabled === false
+  try {
+    const location =
+      gpsConfig?.gpsEnabled === false
         ? {}
         : await getCurrentLocation();
 
-      setGpsStatus("Submitting attendance...");
+    if (location.capturedAt) {
+      const ageSeconds =
+        (Date.now() - location.capturedAt) / 1000;
 
-      const result = await api(
-        `/attendance/${action}`,
-        {
-          method: "POST",
-          body: JSON.stringify(location)
-        }
-      );
+      console.log("GPS Debug:", {
+        ageSeconds,
+        accuracy: location.accuracy,
+        capturedAt: location.capturedAt,
+        browserTime: Date.now()
+      });
 
-      notify(
-        action === "check-in"
-          ? "Checked in successfully."
-          : "Checked out successfully."
-      );
-
-      await refresh("Attendance");
-      return result;
-    } catch (error) {
-      notify(error.message);
-    } finally {
-      setGpsStatus("");
-      setBusy(false);
+      if (ageSeconds > 60 || ageSeconds < -5) {
+        throw new Error(
+          "GPS timestamp is invalid or expired. Please try again."
+        );
+      }
     }
-  };
+
+    setGpsStatus("Submitting attendance...");
+
+    const requestStartedAt = Date.now();
+
+    const result = await api(`/attendance/${action}`, {
+      method: "POST",
+      body: JSON.stringify(location)
+    });
+
+    console.log(
+      "Attendance API duration:",
+      Date.now() - requestStartedAt,
+      "ms"
+    );
+
+    notify(
+      action === "check-in"
+        ? "Checked in successfully."
+        : "Checked out successfully."
+    );
+
+    await refresh("Attendance");
+    return result;
+  } catch (error) {
+    console.error("Attendance error:", error.message);
+    notify(error.message);
+  } finally {
+    setGpsStatus("");
+    setBusy(false);
+  }
+};
 
   // ==========================================
   // EMPLOYEE MANAGEMENT
