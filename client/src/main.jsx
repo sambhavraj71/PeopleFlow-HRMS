@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import {
   LayoutDashboard,
   Users,
+  BarChart3,
   Clock,
   CalendarDays,
   CalendarClock,
@@ -14,9 +15,16 @@ import {
   Plus,
   Download,
   ShieldCheck,
-  MapPin
+  MapPin,
+  FileText,
+  Upload,
+  Trash2,
+  Megaphone
 } from "lucide-react";
 import "./style.css";
+import HRAnalytics from "./HRAnalytics.jsx";
+import Announcements from "./Announcements.jsx";
+import NotificationBell from "./NotificationBell.jsx";
 
 const BASE =
   import.meta.env.VITE_API_URL || "http://localhost:5000/api";
@@ -63,11 +71,14 @@ function App() {
 
   const [month, setMonth] = useState(() => {
     const now = new Date();
-    return new Intl.DateTimeFormat("en-CA", {
+    const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: "Asia/Kolkata",
       year: "numeric",
       month: "2-digit"
-    }).format(now);
+    }).formatToParts(now);
+    const year = parts.find((part) => part.type === "year").value;
+    const mo = parts.find((part) => part.type === "month").value;
+    return `${year}-${mo}`;
   });
 
   const [gpsConfig, setGpsConfig] = useState(null);
@@ -77,6 +88,10 @@ function App() {
   const [employees, setEmployees] = useState([]);
   const [myShift, setMyShift] = useState(null);
   const [editingShift, setEditingShift] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [documentEmployees, setDocumentEmployees] = useState([]);
+  const [documentFilter, setDocumentFilter] = useState("");
+  const [documentStatusFilter, setDocumentStatusFilter] = useState("");
 
   const manager =
     user?.role === "admin" || user?.role === "hr";
@@ -109,6 +124,18 @@ function App() {
 
   const refresh = async (target = page) => {
     try {
+      if (target === "Announcements" || target === "HR Analytics") return;
+
+      if (target === "Documents") {
+        const [docs, people] = await Promise.all([
+          api("/documents"),
+          manager ? api("/employees") : Promise.resolve([])
+        ]);
+        setDocuments(docs);
+        setDocumentEmployees(people);
+        return;
+      }
+
       if (target === "Shifts") {
         const [shiftResult, employeeResult] =
           await Promise.all([
@@ -236,6 +263,10 @@ function App() {
     setShifts([]);
     setEmployees([]);
     setMyShift(null);
+    setDocuments([]);
+    setDocumentEmployees([]);
+    setDocumentFilter("");
+    setDocumentStatusFilter("");
   };
 
   const act = async (
@@ -507,6 +538,124 @@ function App() {
   };
 
   // ==========================================
+  // DOCUMENT MANAGEMENT
+  // ==========================================
+
+  const uploadDocument = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    const file = fields.get("file");
+
+    if (!(file instanceof File) || !file.size) {
+      notify("Select a document to upload");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      notify("File must be 5 MB or smaller");
+      return;
+    }
+    if (!["application/pdf", "image/jpeg", "image/png"].includes(file.type)) {
+      notify("Only PDF, JPG and PNG are allowed");
+      return;
+    }
+
+    const body = new FormData();
+    body.append("file", file);
+    body.append("documentType", fields.get("documentType"));
+    body.append("title", fields.get("title"));
+    if (manager && fields.get("employeeId")) {
+      body.append("employeeId", fields.get("employeeId"));
+    }
+
+    setBusy(true);
+    try {
+      // Do not set Content-Type: browser adds multipart boundary.
+      const response = await fetch(BASE + "/documents/upload", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token },
+        body
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || "Upload failed");
+      notify("Document uploaded successfully");
+      form.reset();
+      await refresh("Documents");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadDocument = async (doc) => {
+    setBusy(true);
+    try {
+      const response = await fetch(BASE + `/documents/${doc._id}/file`, {
+        headers: { Authorization: "Bearer " + token }
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.message || "Download failed");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      const extension = doc.mimeType === "application/pdf" ? ".pdf" :
+        doc.mimeType === "image/png" ? ".png" : ".jpg";
+      link.href = url;
+      link.download = `document-${doc._id}${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reviewDocument = async (doc, status) => {
+    let rejectionReason;
+    if (status === "rejected") {
+      rejectionReason = window.prompt("Enter a rejection reason:");
+      if (rejectionReason === null) return;
+      rejectionReason = rejectionReason.trim();
+      if (!rejectionReason || rejectionReason.length > 500) {
+        notify("Rejection reason must be 1–500 characters");
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      await api(`/documents/${doc._id}/verify`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, ...(rejectionReason ? { rejectionReason } : {}) })
+      });
+      notify(`Document ${status}`);
+      await refresh("Documents");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteDocument = async (doc) => {
+    if (!window.confirm(`Delete "${doc.title}" permanently?`)) return;
+    setBusy(true);
+    try {
+      await api(`/documents/${doc._id}`, { method: "DELETE" });
+      notify("Document deleted");
+      await refresh("Documents");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ==========================================
   // LEAVE MANAGEMENT
   // ==========================================
 
@@ -581,17 +730,20 @@ function App() {
   // ==========================================
 
   const nav = [
-    ["Dashboard", LayoutDashboard],
-    ...(manager
-      ? [
-          ["Employees", Users],
-          ["Shifts", CalendarClock]
-        ]
-      : []),
-    ["Attendance", Clock],
-    ["Leaves", CalendarDays],
-    ["Payroll", Wallet]
-  ];
+  ["Dashboard", LayoutDashboard],
+  ...(manager
+    ? [
+        ["Employees", Users],
+        ["Shifts", CalendarClock],
+        ["HR Analytics", BarChart3]
+      ]
+    : []),
+  ["Attendance", Clock],
+  ["Documents", FileText],
+  ["Announcements", Megaphone],
+  ["Leaves", CalendarDays],
+  ["Payroll", Wallet]
+];
 
   // ==========================================
   // LOGIN PAGE
@@ -733,6 +885,7 @@ function App() {
           </div>
 
           <div className="header-right">
+            <NotificationBell token={token} baseUrl={BASE} onOpenAnnouncements={() => { setPage("Announcements"); setSidebar(false); }} />
             <span className="role-pill">
               <ShieldCheck size={14} />
               {user?.role}
@@ -747,6 +900,21 @@ function App() {
         <div className="content">
           {message && (
             <div className="notice">{message}</div>
+          )}
+          {/* ===================================
+            HR ANALYTICS & REPORTS
+        =================================== */}
+
+        {page === "HR Analytics" && manager && (
+        <HRAnalytics
+            token={token}
+            baseUrl={BASE}
+            initialMonth={month}
+        />
+        )}
+
+          {page === "Announcements" && (
+            <Announcements token={token} baseUrl={BASE} manager={manager} />
           )}
 
           {/* ===================================
@@ -1583,6 +1751,127 @@ function App() {
           )}
 
           {/* ===================================
+               DOCUMENT MANAGEMENT
+          =================================== */}
+
+          {page === "Documents" && (
+            <>
+              <section className="panel">
+                <h3><Upload size={19} /> Upload Employee Document</h3>
+                <p className="muted">PDF, JPG or PNG · Maximum 5 MB. Use dummy documents while testing.</p>
+                <form className="form-grid" onSubmit={uploadDocument}>
+                  {manager && (
+                    <label>
+                      Employee
+                      <select name="employeeId" defaultValue="" required>
+                        <option value="" disabled>Select employee</option>
+                        {documentEmployees.filter((person) => person.active).map((person) => (
+                          <option key={person.id} value={person.id}>
+                            {person.name} ({person.email})
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <label>
+                    Document Type
+                    <select name="documentType" required defaultValue="resume">
+                      <option value="resume">Resume</option>
+                      <option value="aadhaar">Aadhaar</option>
+                      <option value="pan">PAN</option>
+                      <option value="education">Education Certificate</option>
+                      <option value="experience">Experience Certificate</option>
+                      <option value="offer-letter">Offer Letter</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label>
+                    Document Title
+                    <input name="title" placeholder="e.g. Resume 2026" minLength={2} maxLength={150} required />
+                  </label>
+                  <label>
+                    Choose File
+                    <input name="file" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" required />
+                  </label>
+                  <button className="primary" disabled={busy}>
+                    <Upload size={16} /> {busy ? "Please wait..." : "Upload Document"}
+                  </button>
+                </form>
+              </section>
+
+              <section className="panel">
+                <div className="section-heading">
+                  <h3><FileText size={19} /> Document Records <span className="count">{documents.length}</span></h3>
+                  <button className="small" disabled={busy} onClick={() => refresh("Documents")}>Refresh</button>
+                </div>
+                <div className="document-filters">
+                  {manager && (
+                    <select value={documentFilter} onChange={(e) => setDocumentFilter(e.target.value)}>
+                      <option value="">All employees</option>
+                      {documentEmployees.map((person) => (
+                        <option key={person.id} value={person.id}>{person.name}</option>
+                      ))}
+                    </select>
+                  )}
+                  <select value={documentStatusFilter} onChange={(e) => setDocumentStatusFilter(e.target.value)}>
+                    <option value="">All statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="verified">Verified</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        {manager && <th>Employee</th>}
+                        <th>Title</th><th>Type</th><th>File</th>
+                        <th>Uploaded</th><th>Status</th><th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {documents.filter((doc) =>
+                        (!documentFilter || String(doc.employee?._id || doc.employee) === documentFilter) &&
+                        (!documentStatusFilter || doc.status === documentStatusFilter)
+                      ).map((doc) => {
+                        const ownUpload = String(doc.uploadedBy?._id || doc.uploadedBy) === String(user?.id);
+                        const canReview = manager && doc.status === "pending" && !ownUpload;
+                        const canDelete = manager || doc.status === "pending";
+                        return (
+                          <tr key={doc._id}>
+                            {manager && <td>{doc.employee?.name || "Employee"}</td>}
+                            <td><strong>{doc.title}</strong>{doc.rejectionReason && <small className="subtext">Reason: {doc.rejectionReason}</small>}</td>
+                            <td className="capitalize">{doc.documentType.replaceAll("-", " ")}</td>
+                            <td>{doc.originalFileName}<small className="subtext">{(doc.fileSize / 1024).toFixed(1)} KB</small></td>
+                            <td>{new Date(doc.createdAt).toLocaleDateString("en-IN")}</td>
+                            <td><Status value={doc.status} /></td>
+                            <td>
+                              <div className="actions">
+                                <button className="small" disabled={busy} onClick={() => downloadDocument(doc)}><Download size={14} /> Download</button>
+                                {canReview && (
+                                  <>
+                                    <button className="small green" disabled={busy} onClick={() => reviewDocument(doc, "verified")}>Verify</button>
+                                    <button className="small" disabled={busy} onClick={() => reviewDocument(doc, "rejected")}>Reject</button>
+                                  </>
+                                )}
+                                {canDelete && <button className="small" disabled={busy} onClick={() => deleteDocument(doc)}><Trash2 size={14} /> Delete</button>}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {!documents.some((doc) =>
+                  (!documentFilter || String(doc.employee?._id || doc.employee) === documentFilter) &&
+                  (!documentStatusFilter || doc.status === documentStatusFilter)
+                ) && <Empty />}
+              </section>
+            </>
+          )}
+
+          {/* ===================================
               LEAVE MANAGEMENT
           =================================== */}
 
@@ -1932,6 +2221,7 @@ function Metric({ title, value, icon }) {
 function Status({ value }) {
   const good = [
     "approved",
+    "verified",
     "active",
     "completed",
     "on-time",

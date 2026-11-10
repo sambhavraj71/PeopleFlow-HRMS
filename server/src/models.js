@@ -7,10 +7,6 @@ const schemaOptions = {
   timestamps: true
 };
 
-// ==============================
-// SHIFT MODEL
-// ==============================
-
 const shiftSchema = new Schema(
   {
     name: {
@@ -129,9 +125,6 @@ const userSchema = new Schema(
 
 export const User = model("User", userSchema);
 
-// ==============================
-// GPS LOCATION SCHEMA
-// ==============================
 
 const gpsLocationSchema = new Schema(
   {
@@ -171,10 +164,6 @@ const gpsLocationSchema = new Schema(
     _id: false
   }
 );
-
-// ==============================
-// ATTENDANCE MODEL
-// ==============================
 
 const attendanceSchema = new Schema(
   {
@@ -301,10 +290,6 @@ export const Attendance = model(
   attendanceSchema
 );
 
-// ==============================
-// LEAVE MODEL
-// ==============================
-
 const leaveSchema = new Schema(
   {
     employee: {
@@ -359,11 +344,6 @@ const leaveSchema = new Schema(
 );
 
 export const Leave = model("Leave", leaveSchema);
-
-// ==============================
-// PAYROLL MODEL
-// ==============================
-
 const payrollSchema = new Schema(
   {
     employee: {
@@ -440,4 +420,252 @@ payrollSchema.index(
   { unique: true }
 );
 
+const employeeDocumentSchema = new Schema(
+  {
+    employee: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true
+    },
+
+    documentType: {
+      type: String,
+      enum: [
+        "aadhaar",
+        "pan",
+        "resume",
+        "education",
+        "experience",
+        "offer-letter",
+        "other"
+      ],
+      required: true
+    },
+
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 150
+    },
+
+    originalFileName: {
+      type: String,
+      required: true
+    },
+
+    storageKey: {
+      type: String,
+      required: true,
+      unique: true,
+      select: false
+    },
+
+    mimeType: {
+      type: String,
+      enum: [
+        "application/pdf",
+        "image/jpeg",
+        "image/png"
+      ],
+      required: true
+    },
+
+    fileSize: {
+      type: Number,
+      required: true,
+      min: 1,
+      max: 5 * 1024 * 1024
+    },
+
+    status: {
+      type: String,
+      enum: [
+        "pending",
+        "verified",
+        "rejected"
+      ],
+      default: "pending"
+    },
+
+    rejectionReason: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: ""
+    },
+
+    uploadedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+
+    reviewedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null
+    },
+
+    reviewedAt: {
+      type: Date,
+      default: null
+    }
+  },
+  schemaOptions
+);
+
+employeeDocumentSchema.index({
+  employee: 1,
+  createdAt: -1
+});
+
+employeeDocumentSchema.index({
+  status: 1,
+  createdAt: -1
+});
+
+export const EmployeeDocument = model(
+  "EmployeeDocument",
+  employeeDocumentSchema
+);
+
 export const Payroll = model("Payroll", payrollSchema);
+
+const announcementSchema = new Schema(
+  {
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+      minlength: 3,
+      maxlength: 150
+    },
+
+    content: {
+      type: String,
+      required: true,
+      trim: true,
+      minlength: 5,
+      maxlength: 5000
+    },
+
+    priority: {
+      type: String,
+      enum: ["normal", "important", "urgent"],
+      default: "normal"
+    },
+
+    audience: {
+      type: String,
+      enum: ["all", "department"],
+      default: "all"
+    },
+
+    department: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+
+    status: {
+      type: String,
+      enum: ["draft", "published", "archived"],
+      default: "draft"
+    },
+
+    publishedAt: {
+      type: Date,
+      default: null
+    },
+
+    expiresAt: {
+      type: Date,
+      default: null
+    },
+
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+
+    updatedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null
+    }
+  },
+  schemaOptions
+);
+
+announcementSchema.index({
+  status: 1,
+  publishedAt: -1
+});
+
+announcementSchema.index({
+  audience: 1,
+  department: 1
+});
+
+export const Announcement = model(
+  "Announcement",
+  announcementSchema
+);
+
+const notificationSchema = new Schema(
+  {
+    recipient: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true
+    },
+
+    announcement: {
+      type: Schema.Types.ObjectId,
+      ref: "Announcement",
+      required: true
+    },
+
+    type: {
+      type: String,
+      enum: ["announcement"],
+      default: "announcement"
+    },
+
+    isRead: {
+      type: Boolean,
+      default: false
+    },
+
+    readAt: {
+      type: Date,
+      default: null
+    }
+  },
+  schemaOptions
+);
+
+notificationSchema.index(
+  {
+    recipient: 1,
+    announcement: 1
+  },
+  {
+    unique: true
+  }
+);
+
+notificationSchema.index({
+  recipient: 1,
+  isRead: 1,
+  createdAt: -1
+});
+
+export const Notification = model(
+  "Notification",
+  notificationSchema
+);

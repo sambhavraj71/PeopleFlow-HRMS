@@ -1,6 +1,11 @@
 
 import "dotenv/config";
-
+import PDFDocument from "pdfkit";
+import multer from "multer";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -9,7 +14,7 @@ import morgan from "morgan";
 import rateLimit from "express-rate-limit";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import PDFDocument from "pdfkit";
+import announcementRouter from "./announcementRoutes.js";
 import { z } from "zod";
 
 import {
@@ -17,9 +22,14 @@ import {
   Shift,
   Attendance,
   Leave,
-  Payroll
+  Payroll,
+  EmployeeDocument
 } from "./models.js";
 import { sendMail } from "./mailer.js";
+import {
+  analyticsRouter,
+  exportRouter
+} from "./analyticsRoutes.js";
 
 // ENVIRONMENT CONFIGURATION
 
@@ -77,6 +87,115 @@ if (GPS_ENABLED) {
   }
 }
 
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const DOCUMENT_STORAGE_DIR = path.resolve(
+  __dirname,
+  "../private-documents"
+);
+
+const DOCUMENT_MAX_SIZE = 5 * 1024 * 1024;
+
+const allowedDocumentTypes = {
+  "application/pdf": ".pdf",
+  "image/jpeg": ".jpg",
+  "image/png": ".png"
+};
+
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: DOCUMENT_MAX_SIZE,
+    files: 1,
+    fields: 3,
+    parts: 4
+  },
+  fileFilter: (req, file, callback) => {
+    if (!allowedDocumentTypes[file.mimetype]) {
+      const error = new Error(
+        "Only PDF, JPG and PNG files are allowed"
+      );
+      error.status = 400;
+      return callback(error);
+    }
+
+    callback(null, true);
+  }
+});
+
+const documentInputSchema = z.object({
+  employeeId: z.string().optional(),
+  documentType: z.enum([
+    "aadhaar",
+    "pan",
+    "resume",
+    "education",
+    "experience",
+    "offer-letter",
+    "other"
+  ]),
+  title: z.string().trim().min(2).max(150)
+});
+
+const documentReviewSchema = z.object({
+  status: z.enum(["verified", "rejected"]),
+  rejectionReason: z.string().trim().max(500).optional()
+}).refine(
+  (data) =>
+    data.status !== "rejected" ||
+    Boolean(data.rejectionReason),
+  {
+    message: "Rejection reason is required"
+  }
+);
+
+function detectDocumentType(buffer) {
+  if (
+    buffer.length >= 5 &&
+    buffer.subarray(0, 5).toString("ascii") === "%PDF-"
+  ) {
+    return "application/pdf";
+  }
+
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+
+  if (
+    buffer.length >= 8 &&
+    buffer.subarray(0, 8).equals(
+      Buffer.from([
+        0x89, 0x50, 0x4e, 0x47,
+        0x0d, 0x0a, 0x1a, 0x0a
+      ])
+    )
+  ) {
+    return "image/png";
+  }
+
+  return null;
+}
+
+function canAccessDocument(user, document) {
+  return (
+    user.role === "admin" ||
+    user.role === "hr" ||
+    String(document.employee) === String(user.id)
+  );
+}
+
+function safeDocument(document) {
+  const result = document.toObject();
+  delete result.storageKey;
+  return result;
+}
 
 
 const app = express();
@@ -759,6 +878,365 @@ app.patch(
 );
 
 
+
+ 
+// ==========================================
+// EMPLOYEE DOCUMENT MANAGEMENT
+// ==========================================
+
+// UPLOAD DOCUMENT
+
+app.post(
+  "/api/documents/upload",
+  auth,
+  documentUpload.single("file"),
+  wrap(async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({
+        message: "Please select a document"
+      });
+    }
+
+    const data = validate(
+      documentInputSchema,
+      req.body
+    );
+
+    const isManager = ["admin", "hr"].includes(
+      req.user.role
+    );
+
+    const employeeId = isManager
+      ? data.employeeId || req.user.id
+      : req.user.id;
+
+    if (!mongoose.isValidObjectId(employeeId)) {
+      return res.status(400).json({
+        message: "Invalid employee ID"
+      });
+    }
+
+    const employee = await User.findById(employeeId);
+
+    if (!employee || !employee.active) {
+      return res.status(404).json({
+        message: "Active employee not found"
+      });
+    }
+
+    const detectedType = detectDocumentType(
+      req.file.buffer
+    );
+
+    if (
+      !detectedType ||
+      detectedType !== req.file.mimetype
+    ) {
+      return res.status(400).json({
+        message: "Invalid file content or file type"
+      });
+    }
+
+    await fs.mkdir(DOCUMENT_STORAGE_DIR, {
+      recursive: true,
+      mode: 0o700
+    });
+
+    const storageKey =
+      randomUUID() + allowedDocumentTypes[detectedType];
+
+    const filePath = path.join(
+      DOCUMENT_STORAGE_DIR,
+      storageKey
+    );
+
+    await fs.writeFile(
+      filePath,
+      req.file.buffer,
+      { flag: "wx", mode: 0o600 }
+    );
+
+    let document;
+
+    try {
+      document = await EmployeeDocument.create({
+        employee: employeeId,
+        documentType: data.documentType,
+        title: data.title,
+        originalFileName: path.basename(
+          req.file.originalname.replace(/\\/g, "/")
+        ).slice(0, 255),
+        storageKey,
+        mimeType: detectedType,
+        fileSize: req.file.size,
+        uploadedBy: req.user.id
+      });
+    } catch (error) {
+      await fs.unlink(filePath).catch(() => {});
+      throw error;
+    }
+
+    res.status(201).json({
+      message: "Document uploaded successfully",
+      document: safeDocument(document)
+    });
+  })
+);
+
+// LIST DOCUMENTS
+
+app.get(
+  "/api/documents",
+  auth,
+  wrap(async (req, res) => {
+    const isManager = ["admin", "hr"].includes(
+      req.user.role
+    );
+
+    const query = isManager
+      ? {}
+      : { employee: req.user.id };
+
+    if (req.query.employeeId) {
+      if (!mongoose.isValidObjectId(req.query.employeeId)) {
+        return res.status(400).json({
+          message: "Invalid employee ID"
+        });
+      }
+
+      if (
+        !isManager &&
+        String(req.query.employeeId) !== String(req.user.id)
+      ) {
+        return res.status(403).json({
+          message: "Permission denied"
+        });
+      }
+
+      query.employee = req.query.employeeId;
+    }
+
+    if (req.query.status) {
+      const status = validate(
+        z.enum(["pending", "verified", "rejected"]),
+        req.query.status
+      );
+
+      query.status = status;
+    }
+
+    const documents = await EmployeeDocument.find(query)
+      .populate("employee", "name email department")
+      .populate("uploadedBy", "name")
+      .populate("reviewedBy", "name")
+      .sort({ createdAt: -1 })
+      .limit(500);
+
+    res.json(documents.map(safeDocument));
+  })
+);
+
+// PREVIEW OR DOWNLOAD DOCUMENT
+
+app.get(
+  "/api/documents/:id/file",
+  auth,
+  wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        message: "Invalid document ID"
+      });
+    }
+
+    const document = await EmployeeDocument.findById(
+      req.params.id
+    ).select("+storageKey");
+
+    if (!document) {
+      return res.status(404).json({
+        message: "Document not found"
+      });
+    }
+
+    if (!canAccessDocument(req.user, document)) {
+      return res.status(403).json({
+        message: "Permission denied"
+      });
+    }
+
+    const filePath = path.join(
+      DOCUMENT_STORAGE_DIR,
+      path.basename(document.storageKey)
+    );
+
+    let file;
+
+    try {
+      file = await fs.readFile(filePath);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        return res.status(404).json({
+          message: "Stored file not found"
+        });
+      }
+
+      throw error;
+    }
+
+    res.setHeader(
+      "Content-Type",
+      document.mimeType
+    );
+
+    res.setHeader(
+      "Content-Length",
+      file.length
+    );
+
+    res.setHeader(
+      "Cache-Control",
+      "no-store"
+    );
+
+    res.setHeader(
+      "X-Content-Type-Options",
+      "nosniff"
+    );
+
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'none'; sandbox"
+    );
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="document-${document.id}${allowedDocumentTypes[document.mimeType]}"`
+    );
+
+    res.send(file);
+  })
+);
+
+// VERIFY OR REJECT DOCUMENT
+
+app.patch(
+  "/api/documents/:id/verify",
+  auth,
+  roles("admin", "hr"),
+  wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        message: "Invalid document ID"
+      });
+    }
+
+    const data = validate(
+      documentReviewSchema,
+      req.body
+    );
+
+    const document = await EmployeeDocument.findById(
+      req.params.id
+    );
+
+    if (!document) {
+      return res.status(404).json({
+        message: "Document not found"
+      });
+    }
+
+    if (document.status !== "pending") {
+      return res.status(409).json({
+        message: "Document already reviewed"
+      });
+    }
+
+    if (
+      String(document.uploadedBy) === String(req.user.id)
+    ) {
+      return res.status(403).json({
+        message: "Cannot verify your own upload"
+      });
+    }
+
+    document.status = data.status;
+    document.rejectionReason =
+      data.status === "rejected"
+        ? data.rejectionReason
+        : "";
+
+    document.reviewedBy = req.user.id;
+    document.reviewedAt = new Date();
+
+    await document.save();
+
+    res.json({
+      message: `Document ${data.status} successfully`,
+      document: safeDocument(document)
+    });
+  })
+);
+
+// DELETE DOCUMENT
+
+app.delete(
+  "/api/documents/:id",
+  auth,
+  wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        message: "Invalid document ID"
+      });
+    }
+
+    const document = await EmployeeDocument.findById(
+      req.params.id
+    ).select("+storageKey");
+
+    if (!document) {
+      return res.status(404).json({
+        message: "Document not found"
+      });
+    }
+
+    if (!canAccessDocument(req.user, document)) {
+      return res.status(403).json({
+        message: "Permission denied"
+      });
+    }
+
+    if (
+      req.user.role === "employee" &&
+      document.status !== "pending"
+    ) {
+      return res.status(403).json({
+        message: "Reviewed documents can only be deleted by HR/Admin"
+      });
+    }
+
+    const filePath = path.join(
+      DOCUMENT_STORAGE_DIR,
+      path.basename(document.storageKey)
+    );
+
+    await EmployeeDocument.deleteOne({
+      _id: document._id
+    });
+
+    await fs.unlink(filePath).catch((error) => {
+      if (error.code !== "ENOENT") {
+        console.error(
+          "Document cleanup failed:",
+          error.message
+        );
+      }
+    });
+
+    res.json({
+      message: "Document deleted successfully"
+    });
+  })
+);
 
 
 // ==========================================
@@ -1639,6 +2117,24 @@ app.get(
 );
 
 
+// HR ANALYTICS & REPORTS
+
+
+app.use(
+  "/api/analytics",
+  auth,
+  roles("admin", "hr"),
+  analyticsRouter
+);
+app.use("/api", auth, announcementRouter);
+
+app.use(
+  "/api/reports/export",
+  auth,
+  roles("admin", "hr"),
+  exportRouter
+);
+
 app.use((req, res) => {
   res.status(404).json({
     message: "Route not found"
@@ -1650,6 +2146,19 @@ app.use((req, res) => {
 
 app.use((err, req, res, next) => {
   console.error(err);
+
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({
+      message:
+        err.code === "LIMIT_FILE_SIZE"
+          ? "File size must not exceed 5 MB"
+          : "Invalid document upload: " + err.message
+    });
+  }
 
   const status =
     err.status ||
