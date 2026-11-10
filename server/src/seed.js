@@ -1,0 +1,3 @@
+import 'dotenv/config';import mongoose from 'mongoose';import bcrypt from 'bcryptjs';import {User} from './models.js';
+const email=process.env.SEED_ADMIN_EMAIL||'admin@example.com';const password=process.env.SEED_ADMIN_PASSWORD||'Admin@12345';
+await mongoose.connect(process.env.MONGO_URI||'mongodb://127.0.0.1:27017/peopleflow');if(await User.exists({email})){console.log('Admin already exists:',email)}else{await User.create({name:'System Admin',email,passwordHash:await bcrypt.hash(password,12),role:'admin',department:'Management',designation:'Administrator',baseSalary:60000});console.log('Admin created:',email)}await mongoose.disconnect();
