@@ -12,7 +12,13 @@ import jwt from "jsonwebtoken";
 import PDFDocument from "pdfkit";
 import { z } from "zod";
 
-import { User, Attendance, Leave, Payroll } from "./models.js";
+import {
+  User,
+  Shift,
+  Attendance,
+  Leave,
+  Payroll
+} from "./models.js";
 import { sendMail } from "./mailer.js";
 
 // ENVIRONMENT CONFIGURATION
@@ -40,6 +46,18 @@ const GPS_MAX_ACCURACY = Number(
 );
 
 const GPS_MAX_AGE_MS = 60 * 1000;
+const SHIFT_TIMEZONE =
+  process.env.SHIFT_TIMEZONE || "Asia/Kolkata";
+
+const officeFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: SHIFT_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23"
+});
 
 if (GPS_ENABLED) {
   if (
@@ -145,6 +163,7 @@ const publicUser = (u) => ({
   designation: u.designation,
   joiningDate: u.joiningDate,
   baseSalary: u.baseSalary,
+  shift: u.shift || null,
   active: u.active
 });
 
@@ -307,6 +326,195 @@ const verifyGPS = (body) => {
   };
 };
 
+
+
+
+const shiftInputSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  graceMinutes: z.number().int().min(0).max(180).default(10),
+  breakMinutes: z.number().int().min(0).max(1440).default(60),
+  overtimeEnabled: z.boolean().default(true),
+  active: z.boolean().default(true)
+}).refine(
+  (s) => s.startTime !== s.endTime,
+  { message: "Start and end time cannot be identical" }
+).refine(
+  (s) => {
+    const start = timeToMinutes(s.startTime);
+    const end = timeToMinutes(s.endTime);
+    const duration = (end - start + 1440) % 1440;
+    return s.breakMinutes < duration;
+  },
+  { message: "Break must be shorter than shift duration" }
+);
+
+function timeToMinutes(time) {
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function officeParts(date) {
+  const parts = Object.fromEntries(
+    officeFormatter.formatToParts(date)
+      .filter((p) => p.type !== "literal")
+      .map((p) => [p.type, p.value])
+  );
+
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute)
+  };
+}
+
+function officeDate(date) {
+  const p = officeParts(date);
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
+function addCalendarDays(dateString, days) {
+  const d = new Date(`${dateString}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function officeDateTimeToUTC(dateString, time) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+
+  const target = Date.UTC(year, month - 1, day, hour, minute);
+  let guess = target;
+
+  for (let i = 0; i < 5; i++) {
+    const p = officeParts(new Date(guess));
+    const represented = Date.UTC(
+      p.year, p.month - 1, p.day, p.hour, p.minute
+    );
+    const difference = target - represented;
+    if (difference === 0) return new Date(guess);
+    guess += difference;
+  }
+
+  throw Object.assign(
+    new Error("Unable to resolve office shift time"),
+    { status: 400 }
+  );
+}
+
+function getShiftWindow(shift, dateString) {
+  const start = officeDateTimeToUTC(dateString, shift.startTime);
+  const overnight =
+    timeToMinutes(shift.endTime) <= timeToMinutes(shift.startTime);
+
+  const endDate = overnight
+    ? addCalendarDays(dateString, 1)
+    : dateString;
+
+  const end = officeDateTimeToUTC(endDate, shift.endTime);
+
+  return { start, end, overnight };
+}
+
+function shiftSnapshot(shift) {
+  return {
+    name: shift.name,
+    startTime: shift.startTime,
+    endTime: shift.endTime,
+    graceMinutes: shift.graceMinutes,
+    breakMinutes: shift.breakMinutes,
+    overtimeEnabled: shift.overtimeEnabled
+  };
+}
+
+function getCheckInShiftDate(shift, now) {
+  const localDate = officeDate(now);
+  const currentMinutes = (() => {
+    const p = officeParts(now);
+    return p.hour * 60 + p.minute;
+  })();
+
+  const overnight =
+    timeToMinutes(shift.endTime) < timeToMinutes(shift.startTime);
+
+  if (overnight) {
+    const previous = addCalendarDays(localDate, -1);
+    const previousWindow = getShiftWindow(shift, previous);
+
+    // After midnight, before previous shift ends.
+    if (
+      currentMinutes < timeToMinutes(shift.endTime) &&
+      now >= previousWindow.start
+    ) {
+      return previous;
+    }
+  }
+
+  return localDate;
+}
+
+function calculateCheckIn(shift, dateString, checkIn) {
+  const window = getShiftWindow(shift, dateString);
+  const graceEnd = new Date(
+    window.start.getTime() + shift.graceMinutes * 60000
+  );
+
+  const lateMinutes = Math.max(
+    0,
+    Math.floor((checkIn - graceEnd) / 60000)
+  );
+
+  return {
+    lateMinutes,
+    attendanceStatus: lateMinutes > 0 ? "late" : "on-time"
+  };
+}
+
+function calculateCheckOut(record, checkOut) {
+  const worked = Math.max(
+    0,
+    Math.floor((checkOut - record.checkIn) / 60000)
+  );
+
+  const breakMinutes = record.shiftSnapshot?.breakMinutes || 0;
+  const workingMinutes = Math.max(0, worked - breakMinutes);
+
+  if (!record.shiftSnapshot?.startTime ||
+      !record.shiftSnapshot?.endTime) {
+    return { workingMinutes };
+  }
+
+  const shift = record.shiftSnapshot;
+  const window = getShiftWindow(shift, record.date);
+
+  const earlyExitMinutes = Math.max(
+    0,
+    Math.ceil((window.end - checkOut) / 60000)
+  );
+
+  const overtimeMinutes = shift.overtimeEnabled
+    ? Math.max(0, Math.floor((checkOut - window.end) / 60000))
+    : 0;
+
+  const late = record.lateMinutes > 0;
+  const early = earlyExitMinutes > 0;
+
+  return {
+    workingMinutes,
+    earlyExitMinutes,
+    overtimeMinutes,
+    attendanceStatus: late && early
+      ? "late-and-early-exit"
+      : early
+        ? "early-exit"
+        : late
+          ? "late"
+          : "on-time"
+  };
+}
 
 // RATE LIMITING
 
@@ -551,6 +759,132 @@ app.patch(
 );
 
 
+
+
+// ==========================================
+// SHIFT MANAGEMENT
+// ==========================================
+
+app.get(
+  "/api/shifts",
+  auth,
+  wrap(async (req, res) => {
+    const shifts = await Shift.find()
+      .sort({ active: -1, name: 1 });
+
+    res.json(shifts);
+  })
+);
+
+app.post(
+  "/api/shifts",
+  auth,
+  roles("admin", "hr"),
+  wrap(async (req, res) => {
+    const data = validate(shiftInputSchema, req.body);
+
+    const shift = await Shift.create(data);
+
+    res.status(201).json(shift);
+  })
+);
+
+app.patch(
+  "/api/shifts/:id",
+  auth,
+  roles("admin", "hr"),
+  wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        message: "Invalid shift ID"
+      });
+    }
+
+    const shift = await Shift.findById(req.params.id);
+
+    if (!shift) {
+      return res.status(404).json({
+        message: "Shift not found"
+      });
+    }
+
+    const patch = validate(
+      shiftInputSchema.partial(),
+      req.body
+    );
+
+    const merged = {
+      ...shift.toObject(),
+      ...patch
+    };
+
+    const updated = validate(shiftInputSchema, merged);
+
+    Object.assign(shift, updated);
+    await shift.save();
+
+    res.json(shift);
+  })
+);
+
+app.patch(
+  "/api/employees/:id/shift",
+  auth,
+  roles("admin", "hr"),
+  wrap(async (req, res) => {
+    const { shiftId } = validate(
+      z.object({
+        shiftId: z.string().nullable()
+      }),
+      req.body
+    );
+
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        message: "Invalid employee ID"
+      });
+    }
+
+    const employee = await User.findById(req.params.id);
+
+    if (!employee) {
+      return res.status(404).json({
+        message: "Employee not found"
+      });
+    }
+
+    if (
+      req.user.role !== "admin" &&
+      employee.role === "admin"
+    ) {
+      return res.status(403).json({
+        message: "Admin account restricted"
+      });
+    }
+
+    if (shiftId !== null) {
+      if (!mongoose.isValidObjectId(shiftId)) {
+        return res.status(400).json({
+          message: "Invalid shift ID"
+        });
+      }
+
+      const shift = await Shift.findById(shiftId);
+
+      if (!shift || !shift.active) {
+        return res.status(400).json({
+          message: "Shift not found or inactive"
+        });
+      }
+    }
+
+    employee.shift = shiftId;
+    await employee.save();
+
+    res.json(publicUser(employee));
+  })
+);
+
 app.get(
   "/api/attendance/config",
   auth,
@@ -587,9 +921,10 @@ app.get(
     }
 
     const records = await Attendance.find(query)
-      .populate("employee", "name email")
-      .sort({ date: -1 })
-      .limit(500);
+        .populate("employee", "name email department designation")
+        .populate("shift", "name startTime endTime")
+        .sort({ date: -1, checkIn: -1 })
+        .limit(500);
 
     res.json(records);
   })
@@ -598,11 +933,24 @@ app.get(
 // GPS CHECK-IN
 
 
+
 app.post(
   "/api/attendance/check-in",
   auth,
   wrap(async (req, res) => {
-    const date = today();
+    const now = new Date();
+
+    const employee = await User.findById(req.user.id)
+      .populate("shift");
+
+    const assignedShift =
+      employee.shift && employee.shift.active
+        ? employee.shift
+        : null;
+
+    const date = assignedShift
+      ? getCheckInShiftDate(assignedShift, now)
+      : officeDate(now);
 
     const existing = await Attendance.findOne({
       employee: req.user.id,
@@ -611,7 +959,18 @@ app.post(
 
     if (existing) {
       return res.status(409).json({
-        message: "Already checked in today"
+        message: "Already checked in for this shift date"
+      });
+    }
+
+    const openRecord = await Attendance.findOne({
+      employee: req.user.id,
+      checkOut: null
+    });
+
+    if (openRecord) {
+      return res.status(409).json({
+        message: "Previous attendance is still open. Check out or contact HR."
       });
     }
 
@@ -620,11 +979,22 @@ app.post(
     const attendanceData = {
       employee: req.user.id,
       date,
-      checkIn: new Date()
+      checkIn: now
     };
 
     if (location) {
       attendanceData.checkInLocation = location;
+    }
+
+    if (assignedShift) {
+      attendanceData.shift = assignedShift._id;
+      attendanceData.shiftSnapshot =
+        shiftSnapshot(assignedShift);
+
+      Object.assign(
+        attendanceData,
+        calculateCheckIn(assignedShift, date, now)
+      );
     }
 
     const attendance = await Attendance.create(
@@ -635,9 +1005,11 @@ app.post(
   })
 );
 
+
 // ==========================================
 // GPS CHECK-OUT
 // ==========================================
+
 
 app.post(
   "/api/attendance/check-out",
@@ -645,34 +1017,45 @@ app.post(
   wrap(async (req, res) => {
     const record = await Attendance.findOne({
       employee: req.user.id,
-      date: today()
-    });
+      checkOut: null
+    }).sort({ checkIn: -1 });
 
     if (!record) {
       return res.status(400).json({
-        message: "Check in first"
+        message: "No open attendance found. Check in first."
       });
     }
 
-    if (record.checkOut) {
+    const now = new Date();
+
+    const elapsedHours =
+      (now - record.checkIn) / 3600000;
+
+    if (elapsedHours > 36) {
       return res.status(409).json({
-        message: "Already checked out"
+        message: "Attendance is older than 36 hours. Contact HR for correction."
       });
     }
 
     const location = verifyGPS(req.body);
 
-    record.checkOut = new Date();
+    record.checkOut = now;
 
     if (location) {
       record.checkOutLocation = location;
     }
+
+    Object.assign(
+      record,
+      calculateCheckOut(record, now)
+    );
 
     await record.save();
 
     res.json(record);
   })
 );
+
 
 // ==========================================
 // LEAVE MANAGEMENT
@@ -1232,7 +1615,7 @@ app.get(
 
       Attendance.countDocuments({
         ...query,
-        date: today()
+        date: officeDate(new Date())
       }),
 
       Payroll.find({

@@ -7,9 +7,63 @@ const schemaOptions = {
   timestamps: true
 };
 
+// ==============================
+// SHIFT MODEL
+// ==============================
 
+const shiftSchema = new Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      unique: true
+    },
+
+    startTime: {
+      type: String,
+      required: true,
+      match: /^([01]\d|2[0-3]):[0-5]\d$/
+    },
+
+    endTime: {
+      type: String,
+      required: true,
+      match: /^([01]\d|2[0-3]):[0-5]\d$/
+    },
+
+    graceMinutes: {
+      type: Number,
+      default: 10,
+      min: 0,
+      max: 180
+    },
+
+    breakMinutes: {
+      type: Number,
+      default: 60,
+      min: 0,
+      max: 1440
+    },
+
+    overtimeEnabled: {
+      type: Boolean,
+      default: true
+    },
+
+    active: {
+      type: Boolean,
+      default: true
+    }
+  },
+  schemaOptions
+);
+
+export const Shift = model("Shift", shiftSchema);
+
+// ==============================
 // USER MODEL
-
+// ==============================
 
 const userSchema = new Schema(
   {
@@ -59,6 +113,12 @@ const userSchema = new Schema(
       min: 0
     },
 
+    shift: {
+      type: Schema.Types.ObjectId,
+      ref: "Shift",
+      default: null
+    },
+
     active: {
       type: Boolean,
       default: true
@@ -69,8 +129,9 @@ const userSchema = new Schema(
 
 export const User = model("User", userSchema);
 
+// ==============================
 // GPS LOCATION SCHEMA
-
+// ==============================
 
 const gpsLocationSchema = new Schema(
   {
@@ -111,9 +172,9 @@ const gpsLocationSchema = new Schema(
   }
 );
 
-
+// ==============================
 // ATTENDANCE MODEL
-
+// ==============================
 
 const attendanceSchema = new Schema(
   {
@@ -148,6 +209,80 @@ const attendanceSchema = new Schema(
       default: undefined
     },
 
+    shift: {
+      type: Schema.Types.ObjectId,
+      ref: "Shift",
+      default: null
+    },
+
+    shiftSnapshot: {
+      name: {
+        type: String,
+        default: ""
+      },
+
+      startTime: {
+        type: String,
+        default: ""
+      },
+
+      endTime: {
+        type: String,
+        default: ""
+      },
+
+      graceMinutes: {
+        type: Number,
+        default: 0
+      },
+
+      breakMinutes: {
+        type: Number,
+        default: 0
+      },
+
+      overtimeEnabled: {
+        type: Boolean,
+        default: false
+      }
+    },
+
+    attendanceStatus: {
+      type: String,
+      enum: [
+        "unassigned",
+        "on-time",
+        "late",
+        "early-exit",
+        "late-and-early-exit"
+      ],
+      default: "unassigned"
+    },
+
+    lateMinutes: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+
+    earlyExitMinutes: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+
+    workingMinutes: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+
+    overtimeMinutes: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+
     notes: {
       type: String,
       default: ""
@@ -156,7 +291,6 @@ const attendanceSchema = new Schema(
   schemaOptions
 );
 
-// Prevent duplicate attendance for same employee and date
 attendanceSchema.index(
   { employee: 1, date: 1 },
   { unique: true }
@@ -167,7 +301,9 @@ export const Attendance = model(
   attendanceSchema
 );
 
-
+// ==============================
+// LEAVE MODEL
+// ==============================
 
 const leaveSchema = new Schema(
   {
@@ -224,7 +360,9 @@ const leaveSchema = new Schema(
 
 export const Leave = model("Leave", leaveSchema);
 
-
+// ==============================
+// PAYROLL MODEL
+// ==============================
 
 const payrollSchema = new Schema(
   {
@@ -296,7 +434,6 @@ const payrollSchema = new Schema(
   },
   schemaOptions
 );
-
 
 payrollSchema.index(
   { employee: 1, month: 1 },
